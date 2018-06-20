@@ -53,15 +53,27 @@ def parse():
         "--user", "-u", help="Nexus user name, defaults to admin",
         default=os.environ.get("NEXUS_USERNAME", "admin")
     )
+    parser.add_argument(
+        "--information-url-path","-i",help="Nexus information URL endpoint path. Defaults to\
+        /service/rest/atlas/system-information",
+        default=os.environ.get("NEXUS_INFORMATION_URL_PATH","/service/rest/atlas/system-information")
+    )
+    parser.add_argument(
+        "--metrics-url-path","-m",help="Nexus metrics URL endpoint path. Defaults to\
+        /service/metrics/data",
+        default=os.environ.get("NEXUS_METRICS_URL_PATH","/service/metrics/data")
+    )
     return parser.parse_args()
 
 
 class NexusCollector(object):
-    def __init__(self, target, user, password):
+    def __init__(self, target, user, password, information_url_path, metrics_url_path):
         self._target = target.rstrip("/")
         self._auth = base64.standard_b64encode('%s:%s' % (user, password))
         self._info = {}
         self._data = {}
+        self._information_url_path = information_url_path
+        self._metrics_url_path = metrics_url_path
 
     def collect(self):
         # make requests
@@ -240,13 +252,20 @@ class NexusCollector(object):
 
     def _request_data(self):
         info_request = urllib2.Request(
-            "{0}/service/rest/atlas/system-information".format(
-                self._target))
+            "{0}{1}".format(
+                self._target,
+                self._information_url_path
+            )
+        )
         info_request.add_header("Authorization", "Basic %s" % self._auth)
         self._info = json.loads(urllib2.urlopen(info_request).read())
 
-        data_request = urllib2.Request("{0}/service/metrics/data".format(
-                self._target))
+        data_request = urllib2.Request(
+            "{0}{1}".format(
+                self._target,
+                self._metrics_url_path
+            )
+        )
         data_request.add_header("Authorization", "Basic %s" % self._auth)
         self._data = json.loads(urllib2.urlopen(data_request).read())
 
@@ -258,7 +277,7 @@ def fatal(msg):
 if __name__ == "__main__":
     print("starting...")
     args = parse()
-    REGISTRY.register(NexusCollector(args.host, args.user, args.password))
+    REGISTRY.register(NexusCollector(args.host, args.user, args.password,args.information_url_path, args.metrics_url_path))
     start_http_server(9184)
     while True:
         time.sleep(1)
