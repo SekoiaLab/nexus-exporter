@@ -4,15 +4,10 @@ import os
 import json
 import time
 import base64
-try:
-    import urllib2
-    from urlparse import urlparse
-    from urllib2 import URLError, HTTPError
-except ImportError:
-    # Python 3
-    import urllib.request as urllib2
-    from urllib.parse import urlparse
-    from urllib.error import URLError, HTTPError
+from urllib.parse import urlparse
+from urllib.error import URLError
+import requests
+from requests.auth import HTTPBasicAuth
 from prometheus_client import start_http_server
 from prometheus_client.core import GaugeMetricFamily, REGISTRY
 import argparse
@@ -69,7 +64,8 @@ def parse():
 class NexusCollector(object):
     def __init__(self, target, user, password, information_url_path, metrics_url_path):
         self._target = target.rstrip("/")
-        self._auth = base64.standard_b64encode('%s:%s' % (user, password))
+        self._user = user
+        self._password = password
         self._info = {}
         self._data = {}
         self._information_url_path = information_url_path
@@ -79,8 +75,8 @@ class NexusCollector(object):
         # make requests
         try:
             self._request_data()
-        except HTTPError as err:
-            if err.code == 401:
+        except requests.exceptions.HTTPError as err:
+            if err.response.status_code == 401:
                 fatal('Authentication failure, attempting to restart')
         except URLError as err:
             fatal(err)
@@ -103,7 +99,7 @@ class NexusCollector(object):
             'Threads Used', value=i['threads'])
 
         i = self._info['system-filestores']
-        for fsname, details in i.iteritems():
+        for fsname, details in i.items():
             mount = self._mount_point(details['description'])
             fts = GaugeMetricFamily(
                 'nexus_filestore_total_space_bytes',
@@ -251,24 +247,17 @@ class NexusCollector(object):
         return description.split('(')[0].strip()
 
     def _request_data(self):
-        info_request = urllib2.Request(
-            "{0}{1}".format(
-                self._target,
-                self._information_url_path
-            )
-        )
-        info_request.add_header("Authorization", "Basic %s" % self._auth)
-        self._info = json.loads(urllib2.urlopen(info_request).read())
+        creds = HTTPBasicAuth(self._user, self._password)
 
-        data_request = urllib2.Request(
-            "{0}{1}".format(
-                self._target,
-                self._metrics_url_path
-            )
-        )
-        data_request.add_header("Authorization", "Basic %s" % self._auth)
-        self._data = json.loads(urllib2.urlopen(data_request).read())
+        url = "{0}{1}".format(self._target, self._information_url_path)
+        response = requests.get(url, auth=creds)
+        response.raise_for_status()
+        self._info = response.json()
 
+        url = "{0}{1}".format(self._target, self._metrics_url_path)
+        response = requests.get(url, auth=creds)
+        response.raise_for_status()
+        self._data = response.json()
 
 def fatal(msg):
     print(msg)
@@ -277,7 +266,15 @@ def fatal(msg):
 if __name__ == "__main__":
     print("starting...")
     args = parse()
-    REGISTRY.register(NexusCollector(args.host, args.user, args.password,args.information_url_path, args.metrics_url_path))
+    REGISTRY.register(
+        NexusCollector(
+            args.host,
+            args.user,
+            args.password,
+            args.information_url_path,
+            args.metrics_url_path
+        )
+    )
     start_http_server(9184)
     while True:
         time.sleep(1)
